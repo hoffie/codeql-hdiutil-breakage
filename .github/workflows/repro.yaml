@@ -1,0 +1,69 @@
+on:
+  workflow_dispatch:
+    inputs:
+  push:
+    branches:
+      - "main"
+
+name:                               CodeQL hdiutil bug repro
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+jobs:
+  repro:
+    name:                           Repro
+    strategy:
+      fail-fast:                    false
+      matrix:
+        config:
+          - config_name:            CodeQL disabled
+            codeql_enabled:         false
+            command_prefix:         ''
+
+          - config_name:            CodeQL enabled
+            codeql_enabled:         true
+            command_prefix:         ''
+
+          - config_name:            CodeQL enabled with sudo workaround
+            codeql_enabled:         true
+            command_prefix:         'sudo -u "$USER" '
+
+          - config_name:            CodeQL enabled with env variable unsetting
+            codeql_enabled:         true
+            command_prefix:         'SEMMLE_PRELOAD_libtrace= DYLD_INSERT_LIBRARIES='
+
+          - config_name:            CodeQL enabled with Github env workaround
+            codeql_enabled:         true
+            env_workaround:         true
+            command_prefix:         'SEMMLE_PRELOAD_libtrace= DYLD_INSERT_LIBRARIES='
+
+          - config_name:            CodeQL disabled with env variable unsetting
+            codeql_enabled:         false
+            command_prefix:         'SEMMLE_PRELOAD_libtrace= DYLD_INSERT_LIBRARIES='
+
+    runs-on:                        macos-12
+    steps:
+      - name:                       Initialize CodeQL
+        if:                         matrix.config.codeql_enabled == true
+        uses:                       github/codeql-action/init@v2.3.6
+        with:
+          languages: 'cpp'
+
+      - name:                       Save env vars
+        if:                         matrix.config.env_workaround == true
+        run:                        |
+          env | grep -F .dylib > env-dylib.saved
+          env | sed -rne 's/([^=]+=).*.dylib/\1/' > "$GITHUB_ENV"
+
+      - name:                       Repro
+        env:
+          SEMMLE_PRELOAD_libtrace: ''
+          DYLD_INSERT_LIBRARIES: ''          
+        run:                        |
+          set -x
+          env | grep -F .dylib || true
+          mkdir foo
+          echo hi > foo/hi.txt
+          bash -c 'echo in subshell && env | grep -F dylib && echo && source env-dylib.saved && echo after source: && env | grep -F dylib' || true
+          ${{ matrix.config.command_prefix }} hdiutil create -debug -srcfolder foo/ foo.dmg
